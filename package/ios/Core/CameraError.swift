@@ -217,6 +217,7 @@ enum CaptureError {
   case videoNotEnabled
   case photoNotEnabled
   case focusRequiresPreview
+  case focusNotAvailableInMultiCam
   case snapshotFailed
   case timedOut
   case insufficientStorage
@@ -251,6 +252,8 @@ enum CaptureError {
       return "timed-out"
     case .focusRequiresPreview:
       return "focus-requires-preview"
+    case .focusNotAvailableInMultiCam:
+      return "focus-not-available-in-multi-cam"
     case .photoNotEnabled:
       return "photo-not-enabled"
     case .insufficientStorage:
@@ -292,6 +295,8 @@ enum CaptureError {
       return "The capture timed out."
     case .focusRequiresPreview:
       return "Focus requires preview={...} to be enabled!"
+    case .focusNotAvailableInMultiCam:
+      return "Focus is not available in multi-camera mode. Only the primary camera can be focused."
     case let .failedWritingMetadata(cause: cause):
       return "Failed to write video/photo metadata! (Cause: \(cause?.localizedDescription ?? "unknown"))"
     case .insufficientStorage:

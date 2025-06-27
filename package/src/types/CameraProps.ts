@@ -52,6 +52,30 @@ export interface CameraProps extends ViewProps {
    */
   device: CameraDevice
   /**
+   * The secondary Camera Device to use for multi-camera functionality.
+   * When set, enables picture-in-picture mode with the secondary camera.
+   *
+   * This feature uses AVCaptureMultiCamSession on iOS and requires iOS 13.0+.
+   * The secondary camera will be displayed as a picture-in-picture overlay.
+   *
+   * @platform iOS
+   * @example
+   * ```tsx
+   * const backDevice = useCameraDevice('back')
+   * const frontDevice = useCameraDevice('front')
+   *
+   * return (
+   *   <Camera
+   *     device={backDevice}
+   *     secondaryDevice={frontDevice}
+   *     isActive={true}
+   *     style={StyleSheet.absoluteFill}
+   *   />
+   * )
+   * ```
+   */
+  secondaryDevice?: CameraDevice
+  /**
    * Whether the Camera should actively stream video frames, or not. See the [documentation about the `isActive` prop](https://react-native-vision-camera.com/docs/guides/lifecycle#the-isactive-prop) for more information.
    *
    * This can be compared to a Video component, where `isActive` specifies whether the video is paused or not.

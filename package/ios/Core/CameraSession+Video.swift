@@ -24,6 +24,16 @@ extension CameraSession {
       let start = DispatchTime.now()
       VisionLogger.log(level: .info, message: "Starting Video recording...")
 
+      // Reset PiP mixer state for new recording session
+      if let mixer = self.pipVideoMixer {
+        mixer.reset()
+        VisionLogger.log(level: .info, message: "PiP mixer reset for new recording session")
+      }
+      
+      // Clear any cached converted buffers
+      self.convertedPrimaryBuffer = nil
+      self.convertedSecondaryBuffer = nil
+
       // Get Video Output
       guard let videoOutput = self.videoOutput else {
         if self.configuration?.video == .disabled {
@@ -44,6 +54,17 @@ extension CameraSession {
             CameraQueues.audioQueue.async {
               self.deactivateAudioSession()
             }
+          }
+          
+          // Clear PiP mixer resources after recording
+          self.convertedPrimaryBuffer = nil
+          self.convertedSecondaryBuffer = nil
+          self.primaryVideoBuffer = nil
+          self.secondaryVideoBuffer = nil
+          
+          // Reset PiP mixer to free up Metal resources
+          if let mixer = self.pipVideoMixer {
+            mixer.reset()
           }
         }
 

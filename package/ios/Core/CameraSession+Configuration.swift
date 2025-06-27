@@ -13,9 +13,15 @@ extension CameraSession {
   // pragma MARK: Input Device
 
   /**
-   Configures the Input Device (`cameraId`)
+   Configures the Input Device (`cameraId`) and optionally secondary device for multi-camera
    */
   func configureDevice(configuration: CameraConfiguration) throws {
+    // Check if multi-camera mode is requested
+    if configuration.secondaryCameraId != nil {
+      try configureMultiCamera(configuration: configuration)
+      return
+    }
+    
     VisionLogger.log(level: .info, message: "Configuring Input Device...")
 
     // Remove all inputs

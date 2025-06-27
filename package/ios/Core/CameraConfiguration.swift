@@ -16,6 +16,7 @@ final class CameraConfiguration {
 
   // Input
   var cameraId: String?
+  var secondaryCameraId: String?
 
   // Outputs
   var photo: OutputConfiguration<Photo> = .disabled
@@ -57,6 +58,7 @@ final class CameraConfiguration {
     if let other {
       // copy over all values
       cameraId = other.cameraId
+      secondaryCameraId = other.secondaryCameraId
       photo = other.photo
       video = other.video
       codeScanner = other.codeScanner
@@ -119,8 +121,8 @@ final class CameraConfiguration {
     }
 
     init(between left: CameraConfiguration?, and right: CameraConfiguration) {
-      // cameraId
-      inputChanged = left?.cameraId != right.cameraId
+      // cameraId or secondaryCameraId
+      inputChanged = left?.cameraId != right.cameraId || left?.secondaryCameraId != right.secondaryCameraId
       // photo, video, codeScanner
       outputsChanged = inputChanged || left?.photo != right.photo || left?.video != right.video
         || left?.codeScanner != right.codeScanner || left?.isMirrored != right.isMirrored

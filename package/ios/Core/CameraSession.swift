@@ -20,12 +20,15 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
   var currentConfigureCall: DispatchTime = .now()
   // Capture Session
   let captureSession = AVCaptureSession()
+  var multiCamSession: AVCaptureMultiCamSession?
   let audioCaptureSession = AVCaptureSession()
   // Inputs & Outputs
   var videoDeviceInput: AVCaptureDeviceInput?
+  var secondaryVideoDeviceInput: AVCaptureDeviceInput?
   var audioDeviceInput: AVCaptureDeviceInput?
   var photoOutput: AVCapturePhotoOutput?
   var videoOutput: AVCaptureVideoDataOutput?
+  var secondaryVideoOutput: AVCaptureVideoDataOutput?
   var audioOutput: AVCaptureAudioDataOutput?
   var codeScannerOutput: AVCaptureMetadataOutput?
   // State
@@ -33,6 +36,12 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
   var recordingSession: RecordingSession?
   var didCancelRecording = false
   var orientationManager = OrientationManager()
+  // PiP Video Mixing
+  var pipVideoMixer: PiPVideoMixer?
+  var primaryVideoBuffer: CVPixelBuffer?
+  var secondaryVideoBuffer: CVPixelBuffer?
+  var convertedPrimaryBuffer: CVPixelBuffer?
+  var convertedSecondaryBuffer: CVPixelBuffer?
 
   // Callbacks
   weak var delegate: CameraSessionDelegate?
@@ -88,8 +97,22 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
   /**
    Creates a PreviewView for the current Capture Session
    */
-  func createPreviewView(frame: CGRect) -> PreviewView {
-    return PreviewView(frame: frame, session: captureSession)
+  func createPreviewView(frame: CGRect) -> UIView {
+    if let multiCamSession = multiCamSession, isMultiCamActive {
+      // Create multi-camera preview with PiP
+      guard let primaryInput = videoDeviceInput,
+            let secondaryInput = secondaryVideoDeviceInput else {
+        return PreviewView(frame: frame, session: self.activeCaptureSession)
+      }
+      
+      return MultiCamPreviewView(frame: frame, 
+                                session: multiCamSession,
+                                primaryPosition: primaryInput.device.position,
+                                secondaryPosition: secondaryInput.device.position)
+    } else {
+      // Create regular single-camera preview
+      return PreviewView(frame: frame, session: self.activeCaptureSession)
+    }
   }
 
   func onConfigureError(_ error: Error) {
@@ -134,18 +157,36 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
       do {
         // If needed, configure the AVCaptureSession (inputs, outputs)
         if difference.isSessionConfigurationDirty {
-          self.captureSession.beginConfiguration()
+          // Check if we're switching to/from multi-camera mode
+          let wasMultiCam = self.configuration?.secondaryCameraId != nil
+          let isMultiCam = config.secondaryCameraId != nil
+          
+          if wasMultiCam != isMultiCam || (isMultiCam && difference.inputChanged) {
+            // Need to reconfigure for multi-camera change
+            if self.activeCaptureSession.isRunning {
+              self.activeCaptureSession.stopRunning()
+            }
+          }
+          
+          // Begin configuration on the appropriate session
+          if !isMultiCam {
+            self.captureSession.beginConfiguration()
+          }
 
           // 1. Update input device
           if difference.inputChanged {
-            try self.configureDevice(configuration: config)
+            if isMultiCam {
+              try self.configureMultiCamera(configuration: config)
+            } else {
+              try self.configureDevice(configuration: config)
+            }
           }
-          // 2. Update outputs
-          if difference.outputsChanged {
+          // 2. Update outputs (only for single camera mode, multi-cam handles its own)
+          if difference.outputsChanged && !isMultiCam {
             try self.configureOutputs(configuration: config)
           }
           // 3. Update Video Stabilization
-          if difference.videoStabilizationChanged {
+          if difference.videoStabilizationChanged && !isMultiCam {
             self.configureVideoStabilization(configuration: config)
           }
           // 4. Update target output orientation
@@ -160,13 +201,15 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 
         // If needed, configure the AVCaptureDevice (format, zoom, low-light-boost, ..)
         if difference.isDeviceConfigurationDirty {
+          let isMultiCam = config.secondaryCameraId != nil
+          
           try device.lockForConfiguration()
           defer {
             device.unlockForConfiguration()
           }
 
-          // 5. Configure format
-          if difference.formatChanged {
+          // 5. Configure format (skip if in multi-camera mode as format is already configured)
+          if difference.formatChanged && !isMultiCam {
             try self.configureFormat(configuration: config, device: device)
           }
           // 6. After step 2. and 4., we also need to configure some output properties that depend on format.
@@ -175,8 +218,8 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             self.configureVideoOutputFormat(configuration: config)
             self.configurePhotoOutputFormat(configuration: config)
           }
-          // 7. Configure side-props (fps, lowLightBoost)
-          if difference.sidePropsChanged {
+          // 7. Configure side-props (fps, lowLightBoost) - skip in multi-camera mode
+          if difference.sidePropsChanged && !isMultiCam {
             try self.configureSideProps(configuration: config, device: device)
           }
           // 8. Configure zoom
@@ -192,7 +235,10 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         if difference.isSessionConfigurationDirty {
           // We commit the session config updates AFTER the device config,
           // that way we can also batch those changes into one update instead of doing two updates.
-          self.captureSession.commitConfiguration()
+          let isMultiCam = config.secondaryCameraId != nil
+          if !isMultiCam {
+            self.captureSession.commitConfiguration()
+          }
         }
 
         // 10. Start or stop the session if needed
@@ -251,16 +297,21 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
    Starts or stops the CaptureSession if needed (`isActive`)
    */
   private func checkIsActive(configuration: CameraConfiguration) {
-    if configuration.isActive == captureSession.isRunning {
+    let session = self.activeCaptureSession
+    VisionLogger.log(level: .info, message: "checkIsActive: isActive=\(configuration.isActive), session.isRunning=\(session.isRunning), sessionType=\(type(of: session))")
+    
+    if configuration.isActive == session.isRunning {
       return
     }
 
     // Start/Stop session
     if configuration.isActive {
-      captureSession.startRunning()
+      VisionLogger.log(level: .info, message: "Starting capture session...")
+      session.startRunning()
       delegate?.onCameraStarted()
     } else {
-      captureSession.stopRunning()
+      VisionLogger.log(level: .info, message: "Stopping capture session...")
+      session.stopRunning()
       delegate?.onCameraStopped()
     }
   }
@@ -268,7 +319,16 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
   public final func captureOutput(_ captureOutput: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
     switch captureOutput {
     case is AVCaptureVideoDataOutput:
-      onVideoFrame(sampleBuffer: sampleBuffer, orientation: connection.orientation, isMirrored: connection.isVideoMirrored)
+      // Check if this is from primary or secondary video output for multi-camera
+      if isMultiCamActive {
+        if captureOutput === videoOutput {
+          onPrimaryVideoFrame(sampleBuffer: sampleBuffer, orientation: connection.orientation, isMirrored: connection.isVideoMirrored)
+        } else if captureOutput === secondaryVideoOutput {
+          onSecondaryVideoFrame(sampleBuffer: sampleBuffer, orientation: connection.orientation, isMirrored: connection.isVideoMirrored)
+        }
+      } else {
+        onVideoFrame(sampleBuffer: sampleBuffer, orientation: connection.orientation, isMirrored: connection.isVideoMirrored)
+      }
     case is AVCaptureAudioDataOutput:
       onAudioFrame(sampleBuffer: sampleBuffer)
     default:
@@ -292,6 +352,189 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
       // Call Frame Processor (delegate) for every Video Frame
       delegate.onFrame(sampleBuffer: sampleBuffer, orientation: orientation, isMirrored: isMirrored)
     }
+  }
+  
+  private final func onPrimaryVideoFrame(sampleBuffer: CMSampleBuffer, orientation: Orientation, isMirrored: Bool) {
+    // Store primary video buffer for PiP mixing
+    if let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+      primaryVideoBuffer = imageBuffer
+      // Clear cached converted buffer when source changes
+      convertedPrimaryBuffer = nil
+    }
+    
+    // Try to mix with secondary buffer if available
+    processPiPFrame(primaryBuffer: sampleBuffer, orientation: orientation, isMirrored: isMirrored)
+    
+    // Also call delegate for frame processing (original behavior)
+    if let delegate {
+      delegate.onFrame(sampleBuffer: sampleBuffer, orientation: orientation, isMirrored: isMirrored)
+    }
+  }
+  
+  private final func onSecondaryVideoFrame(sampleBuffer: CMSampleBuffer, orientation: Orientation, isMirrored: Bool) {
+    // Store secondary video buffer for PiP mixing
+    if let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+      secondaryVideoBuffer = imageBuffer
+      // Clear cached converted buffer when source changes
+      convertedSecondaryBuffer = nil
+    }
+    
+    // The mixing happens in primary frame processing
+  }
+  
+  private final func processPiPFrame(primaryBuffer: CMSampleBuffer, orientation: Orientation, isMirrored: Bool) {
+    guard let primaryPixelBuffer = primaryVideoBuffer,
+          let secondaryPixelBuffer = secondaryVideoBuffer else {
+      // If we don't have both buffers, record the primary buffer as-is
+      if let recordingSession {
+        do {
+          try recordingSession.append(buffer: primaryBuffer, ofType: .video)
+        } catch let error as CameraError {
+          delegate?.onError(error)
+        } catch {
+          delegate?.onError(.capture(.unknown(message: error.localizedDescription)))
+        }
+      }
+      return
+    }
+    
+    // Initialize PiP mixer if needed
+    if pipVideoMixer == nil {
+      pipVideoMixer = PiPVideoMixer()
+    }
+    
+    guard let mixer = pipVideoMixer else {
+      print("Failed to create PiP mixer")
+      return
+    }
+    
+    // Prepare mixer if not already prepared
+    if !mixer.isPrepared {
+      if let formatDescription = CMSampleBufferGetFormatDescription(primaryBuffer) {
+        mixer.prepare(with: formatDescription, outputRetainedBufferCountHint: 3)
+      }
+    }
+    
+    guard mixer.isPrepared else {
+      print("PiP mixer not prepared")
+      // Fallback to primary buffer recording
+      if let recordingSession {
+        do {
+          try recordingSession.append(buffer: primaryBuffer, ofType: .video)
+        } catch let error as CameraError {
+          delegate?.onError(error)
+        } catch {
+          delegate?.onError(.capture(.unknown(message: error.localizedDescription)))
+        }
+      }
+      return
+    }
+    
+    // Update PiP frame to match preview configuration
+    mixer.pipFrame = getNormalizedPiPFrame()
+    
+    // Mix the video frames
+    if let mixedPixelBuffer = mixer.mix(fullScreenPixelBuffer: primaryPixelBuffer, 
+                                       pipPixelBuffer: secondaryPixelBuffer) {
+      
+      // Create a new sample buffer with the mixed pixel buffer
+      if let mixedSampleBuffer = createSampleBuffer(from: mixedPixelBuffer, 
+                                                   timing: CMSampleBufferGetPresentationTimeStamp(primaryBuffer)) {
+        
+        // Write the mixed buffer to recording session
+        if let recordingSession {
+          do {
+            try recordingSession.append(buffer: mixedSampleBuffer, ofType: .video)
+          } catch let error as CameraError {
+            delegate?.onError(error)
+          } catch {
+            delegate?.onError(.capture(.unknown(message: error.localizedDescription)))
+          }
+        }
+      }
+    } else {
+      // Fallback to primary buffer if mixing fails
+      if let recordingSession {
+        do {
+          try recordingSession.append(buffer: primaryBuffer, ofType: .video)
+        } catch let error as CameraError {
+          delegate?.onError(error)
+        } catch {
+          delegate?.onError(.capture(.unknown(message: error.localizedDescription)))
+        }
+      }
+    }
+  }
+  
+  private func getNormalizedPiPFrame() -> CGRect {
+    // Calculate PiP size based on camera aspect ratio to maintain proper proportions
+    let centerX: CGFloat = 0.85
+    let centerY: CGFloat = 0.15
+    let pipWidth: CGFloat = 0.25
+    
+    // Calculate height based on camera aspect ratio with height adjustment
+    let cameraAspectRatio: CGFloat = getCameraAspectRatio()
+    let baseHeight = pipWidth / cameraAspectRatio
+    
+    // Add 20% more height to match preview appearance
+    let heightAdjustment: CGFloat = 1.20
+    let pipHeight = baseHeight * heightAdjustment
+    
+    let topLeftX = centerX - pipWidth / 2
+    let topLeftY = centerY - pipHeight / 2
+    
+    return CGRect(x: topLeftX, y: topLeftY, width: pipWidth, height: pipHeight)
+  }
+  
+  private func getCameraAspectRatio() -> CGFloat {
+    // Get aspect ratio from secondary camera format (PiP camera)
+    guard let secondaryInput = secondaryVideoDeviceInput else {
+      return 16.0 / 9.0 // Default to 16:9
+    }
+    
+    let dimensions = CMVideoFormatDescriptionGetDimensions(secondaryInput.device.activeFormat.formatDescription)
+    return CGFloat(dimensions.width) / CGFloat(dimensions.height)
+  }
+  
+  private func createSampleBuffer(from pixelBuffer: CVPixelBuffer, timing presentationTime: CMTime) -> CMSampleBuffer? {
+    var sampleBuffer: CMSampleBuffer?
+    var formatDescription: CMFormatDescription?
+    
+    let status = CMVideoFormatDescriptionCreateForImageBuffer(
+      allocator: kCFAllocatorDefault,
+      imageBuffer: pixelBuffer,
+      formatDescriptionOut: &formatDescription
+    )
+    
+    guard status == noErr, let formatDesc = formatDescription else {
+      print("Failed to create format description for mixed buffer. Status: \(status)")
+      return nil
+    }
+    
+    var timingInfo = CMSampleTimingInfo(
+      duration: CMTime.invalid,
+      presentationTimeStamp: presentationTime,
+      decodeTimeStamp: CMTime.invalid
+    )
+    
+    // Create sample buffer with proper sample count
+    let createStatus = CMSampleBufferCreateForImageBuffer(
+      allocator: kCFAllocatorDefault,
+      imageBuffer: pixelBuffer,
+      dataReady: true,
+      makeDataReadyCallback: nil,
+      refcon: nil,
+      formatDescription: formatDesc,
+      sampleTiming: &timingInfo,
+      sampleBufferOut: &sampleBuffer
+    )
+    
+    guard createStatus == noErr else {
+      print("Failed to create sample buffer from mixed pixel buffer. Status: \(createStatus)")
+      return nil
+    }
+    
+    return sampleBuffer
   }
 
   private final func onAudioFrame(sampleBuffer: CMSampleBuffer) {

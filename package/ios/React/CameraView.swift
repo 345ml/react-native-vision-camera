@@ -25,6 +25,7 @@ public final class CameraView: UIView, CameraSessionDelegate, PreviewViewDelegat
 
   // props that require reconfiguring
   @objc var cameraId: NSString?
+  @objc var secondaryCameraId: NSString?
   @objc var enableDepthData = false
   @objc var enablePortraitEffectsMatteDelivery = false
   @objc var enableBufferCompression = false
@@ -99,7 +100,7 @@ public final class CameraView: UIView, CameraSessionDelegate, PreviewViewDelegat
 
   // pragma MARK: Internal Properties
   var cameraSession = CameraSession()
-  var previewView: PreviewView?
+  var previewView: UIView?
   var isMounted = false
   private var currentConfigureCall: DispatchTime?
   private let fpsSampleCollector = FpsSampleCollector()
@@ -195,6 +196,7 @@ public final class CameraView: UIView, CameraSessionDelegate, PreviewViewDelegat
 
       // Input Camera Device
       config.cameraId = cameraId as? String
+      config.secondaryCameraId = secondaryCameraId as? String
       config.isMirrored = isMirrored
 
       // Photo
@@ -284,21 +286,40 @@ public final class CameraView: UIView, CameraSessionDelegate, PreviewViewDelegat
   }
 
   func updatePreview() {
-    if preview && previewView == nil {
+    // Check if we need to recreate the preview (switching between single/multi camera)
+    let needsMultiCamPreview = cameraSession.isMultiCamActive
+    let hasMultiCamPreview = previewView is MultiCamPreviewView
+    let needsRecreate = preview && (needsMultiCamPreview != hasMultiCamPreview)
+    
+    VisionLogger.log(level: .info, message: "updatePreview: preview=\(preview), needsMultiCamPreview=\(needsMultiCamPreview), hasMultiCamPreview=\(hasMultiCamPreview), needsRecreate=\(needsRecreate)")
+    
+    if preview && (previewView == nil || needsRecreate) {
+      // Remove existing preview if we need to recreate
+      if needsRecreate && previewView != nil {
+        VisionLogger.log(level: .info, message: "Removing existing preview view for recreation")
+        previewView?.removeFromSuperview()
+        previewView = nil
+      }
+      
       // Create PreviewView and add it
+      VisionLogger.log(level: .info, message: "Creating new preview view")
       previewView = cameraSession.createPreviewView(frame: frame)
-      previewView!.delegate = self
+      if let singlePreview = previewView as? PreviewView {
+        singlePreview.delegate = self
+      }
       addSubview(previewView!)
+      VisionLogger.log(level: .info, message: "Added preview view: \(type(of: previewView!))")
     } else if !preview && previewView != nil {
       // Remove PreviewView and destroy it
+      VisionLogger.log(level: .info, message: "Removing preview view")
       previewView?.removeFromSuperview()
       previewView = nil
     }
 
-    if let previewView {
-      // Update resizeMode from React
+    if let singlePreview = previewView as? PreviewView {
+      // Update resizeMode from React (only for single camera preview)
       let parsed = try? ResizeMode(jsValue: resizeMode as String)
-      previewView.resizeMode = parsed ?? .cover
+      singlePreview.resizeMode = parsed ?? .cover
     }
   }
 
@@ -325,6 +346,10 @@ public final class CameraView: UIView, CameraSessionDelegate, PreviewViewDelegat
   }
 
   func onSessionInitialized() {
+    // Update preview in case we switched between single/multi camera mode
+    DispatchQueue.main.async {
+      self.updatePreview()
+    }
     onInitializedEvent?([:])
   }
 

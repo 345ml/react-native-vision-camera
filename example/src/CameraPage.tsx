@@ -55,10 +55,12 @@ export function CameraPage({ navigation }: Props): React.ReactElement {
   const [enableHdr, setEnableHdr] = useState(false)
   const [flash, setFlash] = useState<'off' | 'on'>('off')
   const [enableNightMode, setEnableNightMode] = useState(false)
+  const [enableMultiCam, setEnableMultiCam] = useState(false)
 
   // camera device settings
   const [preferredDevice] = usePreferredCameraDevice()
   let device = useCameraDevice(cameraPosition)
+  const secondaryDevice = useCameraDevice(cameraPosition === 'back' ? 'front' : 'back')
 
   if (preferredDevice != null && preferredDevice.position === cameraPosition) {
     // override default device with the one selected by the user in settings
@@ -201,6 +203,7 @@ export function CameraPage({ navigation }: Props): React.ReactElement {
               <ReanimatedCamera
                 style={StyleSheet.absoluteFill}
                 device={device}
+                secondaryDevice={enableMultiCam ? secondaryDevice : undefined}
                 isActive={isActive}
                 ref={camera}
                 onInitialized={onInitialized}
@@ -227,7 +230,7 @@ export function CameraPage({ navigation }: Props): React.ReactElement {
                 video={true}
                 audio={microphone.hasPermission}
                 enableLocation={location.hasPermission}
-                frameProcessor={frameProcessor}
+                // frameProcessor={frameProcessor}
               />
             </TapGestureHandler>
           </Reanimated.View>
@@ -264,6 +267,15 @@ export function CameraPage({ navigation }: Props): React.ReactElement {
         {supports60Fps && (
           <PressableOpacity style={styles.button} onPress={() => setTargetFps((t) => (t === 30 ? 60 : 30))}>
             <Text style={styles.text}>{`${targetFps}\nFPS`}</Text>
+          </PressableOpacity>
+        )}
+        {secondaryDevice != null && (
+          <PressableOpacity style={styles.button} onPress={() => setEnableMultiCam((current) => !current)}>
+            <MaterialIcon 
+              name={enableMultiCam ? 'camera-switch' : 'camera-switch-outline'} 
+              color="white" 
+              size={24} 
+            />
           </PressableOpacity>
         )}
         {supportsHdr && (
