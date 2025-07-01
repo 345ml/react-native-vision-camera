@@ -169,7 +169,7 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
           }
           
           // Begin configuration on the appropriate session
-          if !isMultiCam {
+          if !isMultiCam && !wasMultiCam {
             self.captureSession.beginConfiguration()
           }
 
@@ -178,11 +178,16 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             if isMultiCam {
               try self.configureMultiCamera(configuration: config)
             } else {
-              try self.configureDevice(configuration: config)
+              // When switching from multi-cam to single-cam, configureMultiCamera handles the transition
+              if wasMultiCam {
+                try self.configureMultiCamera(configuration: config)
+              } else {
+                try self.configureDevice(configuration: config)
+              }
             }
           }
           // 2. Update outputs (only for single camera mode, multi-cam handles its own)
-          if difference.outputsChanged && !isMultiCam {
+          if difference.outputsChanged && !isMultiCam && !wasMultiCam {
             try self.configureOutputs(configuration: config)
           }
           // 3. Update Video Stabilization
@@ -235,8 +240,9 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         if difference.isSessionConfigurationDirty {
           // We commit the session config updates AFTER the device config,
           // that way we can also batch those changes into one update instead of doing two updates.
+          let wasMultiCam = self.configuration?.secondaryCameraId != nil
           let isMultiCam = config.secondaryCameraId != nil
-          if !isMultiCam {
+          if !isMultiCam && !wasMultiCam {
             self.captureSession.commitConfiguration()
           }
         }

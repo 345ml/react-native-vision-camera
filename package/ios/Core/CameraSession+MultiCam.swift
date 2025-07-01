@@ -87,9 +87,57 @@ extension CameraSession {
   }
   
   private func configureSingleCamera(configuration: CameraConfiguration) throws {
+    VisionLogger.log(level: .info, message: "Switching to single camera mode...")
+    
     // Reset multi-cam session if it was active
-    if multiCamSession != nil {
-      multiCamSession = nil
+    let wasMultiCam = multiCamSession != nil
+    if let multiCamSession = multiCamSession {
+      // Stop and clean up multi-cam session
+      if multiCamSession.isRunning {
+        multiCamSession.stopRunning()
+      }
+      
+      // Remove all inputs and outputs from multi-cam session
+      for input in multiCamSession.inputs {
+        multiCamSession.removeInput(input)
+      }
+      for output in multiCamSession.outputs {
+        multiCamSession.removeOutput(output)
+      }
+      
+      // Clear the multi-cam session reference
+      self.multiCamSession = nil
+    }
+    
+    // If we're switching from multi-cam to single-cam, reset device format and clean up PiP resources
+    if wasMultiCam {
+      // Clean up PiP mixer resources
+      pipVideoMixer?.reset()
+      pipVideoMixer = nil
+      primaryVideoBuffer = nil
+      secondaryVideoBuffer = nil
+      convertedPrimaryBuffer = nil
+      convertedSecondaryBuffer = nil
+      
+      // Reset inputs and outputs
+      videoDeviceInput = nil
+      secondaryVideoDeviceInput = nil
+      photoOutput = nil
+      videoOutput = nil
+      secondaryVideoOutput = nil
+      codeScannerOutput = nil
+      
+      if let cameraId = configuration.cameraId,
+         let videoDevice = AVCaptureDevice(uniqueID: cameraId) {
+        VisionLogger.log(level: .info, message: "Resetting device format after multi-cam switch...")
+        try resetDeviceFormatToDefault(device: videoDevice)
+      }
+      
+      // Begin configuration on single camera session
+      captureSession.beginConfiguration()
+      defer {
+        captureSession.commitConfiguration()
+      }
     }
     
     // Use the existing single camera configuration
@@ -377,5 +425,45 @@ extension CameraSession {
     
     let dims = CMVideoFormatDescriptionGetDimensions(selectedFormat.formatDescription)
     VisionLogger.log(level: .info, message: "Selected multi-cam format: \(dims.width)x\(dims.height)@\(fps)fps")
+  }
+  
+  /**
+   Reset device format to a default single-camera compatible format
+   */
+  private func resetDeviceFormatToDefault(device: AVCaptureDevice) throws {
+    VisionLogger.log(level: .info, message: "Resetting device format to default for \(device.localizedName)...")
+    
+    // Find the first non-multi-cam format (usually the default)
+    let singleCamFormats = device.formats.filter { format in
+      if #available(iOS 13.0, *) {
+        return !format.isMultiCamSupported
+      } else {
+        return true
+      }
+    }
+    
+    // If no non-multi-cam formats, use any format
+    let availableFormats = singleCamFormats.isEmpty ? device.formats : singleCamFormats
+    
+    guard let defaultFormat = availableFormats.first else {
+      throw CameraError.device(.invalid)
+    }
+    
+    try device.lockForConfiguration()
+    defer {
+      device.unlockForConfiguration()
+    }
+    
+    device.activeFormat = defaultFormat
+    
+    // Reset frame rate to a conservative default
+    let fps: Float64 = 30
+    let frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
+    
+    device.activeVideoMinFrameDuration = frameDuration
+    device.activeVideoMaxFrameDuration = frameDuration
+    
+    let dims = CMVideoFormatDescriptionGetDimensions(defaultFormat.formatDescription)
+    VisionLogger.log(level: .info, message: "Reset to single-cam format: \(dims.width)x\(dims.height)@\(fps)fps")
   }
 }
