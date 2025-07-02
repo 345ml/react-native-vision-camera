@@ -154,6 +154,13 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 
       VisionLogger.log(level: .info, message: "configure { ... }: Updating CameraSession Configuration... \(difference)")
 
+      // Block ANY configuration changes during recording to prevent crashes
+      if self.recordingSession != nil {
+        VisionLogger.log(level: .error, message: "Cannot modify camera configuration while recording is active!")
+        self.onConfigureError(CameraError.session(.cameraNotReady))
+        return
+      }
+
       do {
         // If needed, configure the AVCaptureSession (inputs, outputs)
         if difference.isSessionConfigurationDirty {
@@ -162,6 +169,12 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
           let isMultiCam = config.secondaryCameraId != nil
           
           if wasMultiCam != isMultiCam || (isMultiCam && difference.inputChanged) {
+            // Check if recording is active before stopping session
+            if self.recordingSession != nil {
+              VisionLogger.log(level: .error, message: "Cannot reconfigure capture session while recording is active!")
+              throw CameraError.session(.cameraNotReady)
+            }
+            
             // Need to reconfigure for multi-camera change
             if self.activeCaptureSession.isRunning {
               self.activeCaptureSession.stopRunning()
@@ -544,17 +557,22 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
   }
 
   private final func onAudioFrame(sampleBuffer: CMSampleBuffer) {
-    if let recordingSession {
-      do {
-        // Synchronize the Audio Buffer with the Video Session's time because it's two separate
-        // AVCaptureSessions, then write it to the .mov/.mp4 file
-        audioCaptureSession.synchronizeBuffer(sampleBuffer, toSession: captureSession)
-        try recordingSession.append(buffer: sampleBuffer, ofType: .audio)
-      } catch let error as CameraError {
-        delegate?.onError(error)
-      } catch {
-        delegate?.onError(.capture(.unknown(message: error.localizedDescription)))
-      }
+    guard let recordingSession = recordingSession else {
+      // No recording session active, skip audio frame
+      return
+    }
+    
+    do {
+      // Synchronize the Audio Buffer with the Video Session's time because it's two separate
+      // AVCaptureSessions, then write it to the .mov/.mp4 file
+      audioCaptureSession.synchronizeBuffer(sampleBuffer, toSession: activeCaptureSession)
+      try recordingSession.append(buffer: sampleBuffer, ofType: .audio)
+    } catch let error as CameraError {
+      VisionLogger.log(level: .error, message: "Audio frame processing error: \(error)")
+      delegate?.onError(error)
+    } catch {
+      VisionLogger.log(level: .error, message: "Audio frame processing unknown error: \(error.localizedDescription)")
+      delegate?.onError(.capture(.unknown(message: error.localizedDescription)))
     }
   }
 
@@ -567,14 +585,37 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
       return
     }
 
+    VisionLogger.log(level: .error, message: "Session runtime error details: Code=\(error.code.rawValue), Description=\(error.localizedDescription)")
+
+    // Handle specific error codes
+    switch error.code.rawValue {
+    case -11800:
+      VisionLogger.log(level: .error, message: "Recording operation error - session may have been reconfigured during recording")
+      // Don't restart session if recording is active - it will cause more errors
+      if recordingSession != nil {
+        VisionLogger.log(level: .error, message: "Skipping session restart due to active recording")
+        delegate?.onError(.capture(.unknown(message: "Recording failed due to session error")))
+        return
+      }
+    default:
+      break
+    }
+
     // Notify consumer about runtime error
     delegate?.onError(.unknown(message: error._nsError.description, cause: error._nsError))
 
-    let shouldRestart = configuration?.isActive == true
+    let shouldRestart = configuration?.isActive == true && recordingSession == nil
     if shouldRestart {
-      // restart capture session after an error occured
+      // restart capture session after an error occured, but only if not recording
       CameraQueues.cameraQueue.async {
-        self.captureSession.startRunning()
+        // Restart the appropriate session (multi-cam or regular)
+        if let multiCamSession = self.multiCamSession {
+          VisionLogger.log(level: .info, message: "Restarting multi-camera session after error")
+          multiCamSession.startRunning()
+        } else {
+          VisionLogger.log(level: .info, message: "Restarting regular camera session after error")
+          self.captureSession.startRunning()
+        }
       }
     }
   }

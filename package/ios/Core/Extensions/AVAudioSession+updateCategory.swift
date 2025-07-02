@@ -21,6 +21,17 @@ extension AVAudioSession {
                        message: "Changing AVAudioSession category from \(self.category.rawValue) -> \(category.rawValue)")
       try setCategory(category, mode: mode, options: options)
       VisionLogger.log(level: .info, message: "AVAudioSession category changed!")
+    } else {
+      VisionLogger.log(level: .info, message: "AVAudioSession category already set to \(category.rawValue), skipping update")
     }
+  }
+  
+  func forceUpdateCategory(_ category: AVAudioSession.Category,
+                          mode: AVAudioSession.Mode,
+                          options: AVAudioSession.CategoryOptions = []) throws {
+    VisionLogger.log(level: .info,
+                     message: "Force changing AVAudioSession category from \(self.category.rawValue) -> \(category.rawValue)")
+    try setCategory(category, mode: mode, options: options)
+    VisionLogger.log(level: .info, message: "AVAudioSession category force changed!")
   }
 }

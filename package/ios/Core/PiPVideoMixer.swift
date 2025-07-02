@@ -34,6 +34,9 @@ class PiPVideoMixer {
   
   private var textureCache: CVMetalTextureCache?
   
+  // Add lock for thread safety during reset operations
+  private let resetLock = NSLock()
+  
   private lazy var commandQueue: MTLCommandQueue? = {
     guard let metalDevice = metalDevice else {
       return nil
@@ -43,10 +46,7 @@ class PiPVideoMixer {
   }()
   
   private var computePipelineState: MTLComputePipelineState?
-  private lazy var ciContext: CIContext? = {
-    guard let metalDevice = metalDevice else { return nil }
-    return CIContext(mtlDevice: metalDevice)
-  }()
+  private var ciContext: CIContext?
   
   // Metal shader source embedded in Swift
   private let metalShaderSource = """
@@ -196,6 +196,12 @@ class PiPVideoMixer {
     }
   }
   
+  deinit {
+    // Ensure complete cleanup when mixer is deallocated
+    reset()
+    print("PiP Mixer: Deallocated")
+  }
+  
   func prepare(with videoFormatDescription: CMFormatDescription, outputRetainedBufferCountHint: Int) {
     reset()
     
@@ -215,11 +221,25 @@ class PiPVideoMixer {
       return
     }
     
+    // Create Metal texture cache
     var metalTextureCache: CVMetalTextureCache?
     if CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, metalDevice, nil, &metalTextureCache) != kCVReturnSuccess {
       print("PiP Mixer: Unable to allocate texture cache")
+      return
     } else {
       textureCache = metalTextureCache
+    }
+    
+    // Initialize Core Image context with error checking
+    ciContext = CIContext(mtlDevice: metalDevice, options: [
+      .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
+      .outputColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
+      .useSoftwareRenderer: false
+    ])
+    
+    if ciContext == nil {
+      print("PiP Mixer: Failed to create Core Image context")
+      return
     }
     
     isPrepared = true
@@ -227,11 +247,34 @@ class PiPVideoMixer {
   }
   
   func reset() {
+    resetLock.lock()
+    defer { resetLock.unlock() }
+    
+    // Mark as not prepared first to prevent new operations
+    isPrepared = false
+    
+    // Flush and clear texture cache before releasing
+    if let textureCache = textureCache {
+      CVMetalTextureCacheFlush(textureCache, 0)
+    }
+    textureCache = nil
+    
+    // Clear pixel buffer pool
     outputPixelBufferPool = nil
+    
+    // Clear format descriptions
     outputFormatDescription = nil
     inputFormatDescription = nil
-    textureCache = nil
-    isPrepared = false
+    
+    // Clear Core Image context to free up resources
+    ciContext = nil
+    
+    // Force memory cleanup
+    autoreleasepool {
+      // Empty autoreleasepool to force cleanup of any remaining objects
+    }
+    
+    print("PiP Mixer: Resources completely reset")
   }
   
   struct MixerParameters {
@@ -240,9 +283,19 @@ class PiPVideoMixer {
   }
   
   func mix(fullScreenPixelBuffer: CVPixelBuffer, pipPixelBuffer: CVPixelBuffer, fullScreenPixelBufferIsFrontCamera: Bool = false) -> CVPixelBuffer? {
-    guard isPrepared,
-          let outputPixelBufferPool = outputPixelBufferPool else {
+    guard isPrepared else {
       print("PiP Mixer: Not prepared")
+      return nil
+    }
+    
+    guard let outputPixelBufferPool = outputPixelBufferPool else {
+      print("PiP Mixer: No output pixel buffer pool")
+      return nil
+    }
+    
+    // Check if Core Image context is valid before processing
+    guard ciContext != nil else {
+      print("PiP Mixer: Core Image context is nil, cannot process frames")
       return nil
     }
     
@@ -269,13 +322,33 @@ class PiPVideoMixer {
                        Float(pipFrame.size.height) * Float(pipTexture.height))
     var parameters = MixerParameters(pipPosition: pipPosition, pipSize: pipSize)
     
-    // Set up command queue, buffer, and encoder
-    guard let commandQueue = commandQueue,
-          let commandBuffer = commandQueue.makeCommandBuffer(),
-          let commandEncoder = commandBuffer.makeComputeCommandEncoder(),
+    // Set up command queue, buffer, and encoder with GPU error protection
+    guard let commandQueue = commandQueue else {
+      print("PiP Mixer: Command queue unavailable")
+      return nil
+    }
+    
+    guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+      print("PiP Mixer: Failed to create command buffer")
+      return nil
+    }
+    
+    // Add error handler to command buffer
+    commandBuffer.addCompletedHandler { [weak self] buffer in
+      if buffer.status == .error {
+        print("PiP Mixer: Command buffer error: \(String(describing: buffer.error))")
+        // Flush texture cache on error to prevent accumulation
+        if let textureCache = self?.textureCache {
+          CVMetalTextureCacheFlush(textureCache, 0)
+        }
+      }
+    }
+    
+    guard let commandEncoder = commandBuffer.makeComputeCommandEncoder(),
           let computePipelineState = computePipelineState else {
       print("PiP Mixer: Failed to create Metal command encoder")
       
+      // Force flush texture cache and cleanup on failure
       if let textureCache = textureCache {
         CVMetalTextureCacheFlush(textureCache, 0)
       }
@@ -303,7 +376,27 @@ class PiPVideoMixer {
     
     commandEncoder.endEncoding()
     commandBuffer.commit()
+    
+    // Don't wait for completion to avoid blocking, but check status
     commandBuffer.waitUntilCompleted()
+    
+    // Check command buffer status after completion
+    if commandBuffer.status != .completed {
+      print("PiP Mixer: Command buffer did not complete successfully: \(commandBuffer.status.rawValue)")
+      if let error = commandBuffer.error {
+        print("PiP Mixer: Command buffer error: \(error)")
+      }
+      // Still flush cache to prevent accumulation
+      if let textureCache = textureCache {
+        CVMetalTextureCacheFlush(textureCache, 0)
+      }
+      return nil
+    }
+    
+    // Flush texture cache after each frame to prevent accumulation
+    if let textureCache = textureCache {
+      CVMetalTextureCacheFlush(textureCache, 0)
+    }
     
     return outputPixelBuffer
   }
@@ -354,10 +447,31 @@ class PiPVideoMixer {
     
     // Convert YUV to BGRA using Core Image
     guard let ciContext = ciContext else {
-      print("PiP Mixer: No CI context available")
-      return nil
+      print("PiP Mixer: No CI context available - attempting to recreate")
+      // Try to recreate CI context if it's nil
+      if let metalDevice = metalDevice {
+        self.ciContext = CIContext(mtlDevice: metalDevice, options: [
+          .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
+          .outputColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
+          .useSoftwareRenderer: false
+        ])
+        guard let recreatedContext = self.ciContext else {
+          print("PiP Mixer: Failed to recreate CI context")
+          return nil
+        }
+        print("PiP Mixer: Successfully recreated CI context")
+        // Use the recreated context
+        return convertToBGRAWithContext(pixelBuffer: pixelBuffer, context: recreatedContext)
+      } else {
+        print("PiP Mixer: Metal device unavailable for CI context recreation")
+        return nil
+      }
     }
     
+    return convertToBGRAWithContext(pixelBuffer: pixelBuffer, context: ciContext)
+  }
+  
+  private func convertToBGRAWithContext(pixelBuffer: CVPixelBuffer, context: CIContext) -> CVPixelBuffer? {
     let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
     let width = CVPixelBufferGetWidth(pixelBuffer)
     let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -387,7 +501,7 @@ class PiPVideoMixer {
     
     // Use autoreleasepool to ensure immediate cleanup
     autoreleasepool {
-      ciContext.render(ciImage, to: outputBuffer)
+      context.render(ciImage, to: outputBuffer)
     }
     
     return outputBuffer

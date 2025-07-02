@@ -22,12 +22,14 @@ extension CameraSession {
     do {
       let audioSession = AVAudioSession.sharedInstance()
 
-      try audioSession.updateCategory(AVAudioSession.Category.playAndRecord,
-                                      mode: .videoRecording,
-                                      options: [.mixWithOthers,
-                                                .allowBluetoothA2DP,
-                                                .defaultToSpeaker,
-                                                .allowAirPlay])
+      // Force set category even if it appears to be the same, to ensure clean state
+      try audioSession.setCategory(AVAudioSession.Category.playAndRecord,
+                                   mode: .videoRecording,
+                                   options: [.mixWithOthers,
+                                             .allowBluetoothA2DP,
+                                             .defaultToSpeaker,
+                                             .allowAirPlay])
+      VisionLogger.log(level: .info, message: "Audio Session category set to playAndRecord for recording")
 
       if #available(iOS 14.5, *) {
         // prevents the audio session from being interrupted by a phone call
@@ -39,8 +41,25 @@ extension CameraSession {
         try audioSession.setAllowHapticsAndSystemSoundsDuringRecording(true)
       }
 
-      audioCaptureSession.startRunning()
-      VisionLogger.log(level: .info, message: "Audio Session activated!")
+      // Ensure audio session is activated
+      try audioSession.setActive(true)
+      VisionLogger.log(level: .info, message: "Audio Session set to active")
+
+      // Check if audio capture session is already running
+      if audioCaptureSession.isRunning {
+        VisionLogger.log(level: .info, message: "Audio capture session is already running")
+      } else {
+        VisionLogger.log(level: .info, message: "Starting audio capture session...")
+        audioCaptureSession.startRunning()
+        
+        // Verify it actually started
+        if !audioCaptureSession.isRunning {
+          VisionLogger.log(level: .error, message: "Failed to start audio capture session!")
+          throw CameraError.session(.audioSessionFailedToActivate)
+        }
+      }
+      
+      VisionLogger.log(level: .info, message: "Audio Session activated! (isRunning: \(audioCaptureSession.isRunning))")
     } catch let error as NSError {
       VisionLogger.log(level: .error, message: "Failed to activate audio session! Error \(error.code): \(error.description)")
       switch error.code {
@@ -54,9 +73,34 @@ extension CameraSession {
 
   final func deactivateAudioSession() {
     VisionLogger.log(level: .info, message: "Deactivating Audio Session...")
+    
+    // Log current state before stopping
+    VisionLogger.log(level: .info, message: "Audio capture session state before stop: isRunning=\(audioCaptureSession.isRunning), inputs=\(audioCaptureSession.inputs.count), outputs=\(audioCaptureSession.outputs.count)")
 
-    audioCaptureSession.stopRunning()
-    VisionLogger.log(level: .info, message: "Audio Session deactivated!")
+    // Stop the audio capture session
+    if audioCaptureSession.isRunning {
+      audioCaptureSession.stopRunning()
+      VisionLogger.log(level: .info, message: "Audio capture session stopped")
+    } else {
+      VisionLogger.log(level: .warning, message: "Audio capture session was already stopped")
+    }
+    
+    // Reset AVAudioSession to a clean state for next recording
+    do {
+      let audioSession = AVAudioSession.sharedInstance()
+      
+      // Deactivate the audio session first
+      try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+      VisionLogger.log(level: .info, message: "AVAudioSession deactivated")
+      
+      // Reset to ambient category to clear any recording-specific configurations
+      try audioSession.setCategory(.ambient, mode: .default, options: [])
+      VisionLogger.log(level: .info, message: "AVAudioSession category reset to ambient")
+    } catch {
+      VisionLogger.log(level: .error, message: "Failed to reset AVAudioSession: \(error)")
+    }
+    
+    VisionLogger.log(level: .info, message: "Audio Session completely deactivated!")
   }
 
   @objc

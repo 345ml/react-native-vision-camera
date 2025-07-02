@@ -111,21 +111,28 @@ extension CameraSession {
     
     // If we're switching from multi-cam to single-cam, reset device format and clean up PiP resources
     if wasMultiCam {
-      // Clean up PiP mixer resources
-      pipVideoMixer?.reset()
-      pipVideoMixer = nil
-      primaryVideoBuffer = nil
-      secondaryVideoBuffer = nil
-      convertedPrimaryBuffer = nil
-      convertedSecondaryBuffer = nil
+      // Comprehensive resource cleanup with autoreleasepool
+      autoreleasepool {
+        // Clean up PiP mixer resources completely
+        pipVideoMixer?.reset()
+        pipVideoMixer = nil
+        
+        // Clear all buffer references
+        primaryVideoBuffer = nil
+        secondaryVideoBuffer = nil
+        convertedPrimaryBuffer = nil
+        convertedSecondaryBuffer = nil
+        
+        // Reset inputs and outputs
+        videoDeviceInput = nil
+        secondaryVideoDeviceInput = nil
+        photoOutput = nil
+        videoOutput = nil
+        secondaryVideoOutput = nil
+        codeScannerOutput = nil
+      }
       
-      // Reset inputs and outputs
-      videoDeviceInput = nil
-      secondaryVideoDeviceInput = nil
-      photoOutput = nil
-      videoOutput = nil
-      secondaryVideoOutput = nil
-      codeScannerOutput = nil
+      VisionLogger.log(level: .info, message: "Multi-cam resources cleaned up completely")
       
       if let cameraId = configuration.cameraId,
          let videoDevice = AVCaptureDevice(uniqueID: cameraId) {

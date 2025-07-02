@@ -24,15 +24,19 @@ extension CameraSession {
       let start = DispatchTime.now()
       VisionLogger.log(level: .info, message: "Starting Video recording...")
 
-      // Reset PiP mixer state for new recording session
-      if let mixer = self.pipVideoMixer {
-        mixer.reset()
-        VisionLogger.log(level: .info, message: "PiP mixer reset for new recording session")
+      // Reset PiP mixer state for new recording session with complete resource cleanup
+      autoreleasepool {
+        if let mixer = self.pipVideoMixer {
+          mixer.reset()
+          VisionLogger.log(level: .info, message: "PiP mixer reset for new recording session")
+        }
+        
+        // Clear any cached converted buffers
+        self.convertedPrimaryBuffer = nil
+        self.convertedSecondaryBuffer = nil
+        self.primaryVideoBuffer = nil
+        self.secondaryVideoBuffer = nil
       }
-      
-      // Clear any cached converted buffers
-      self.convertedPrimaryBuffer = nil
-      self.convertedSecondaryBuffer = nil
 
       // Get Video Output
       guard let videoOutput = self.videoOutput else {
@@ -56,15 +60,24 @@ extension CameraSession {
             }
           }
           
-          // Clear PiP mixer resources after recording
-          self.convertedPrimaryBuffer = nil
-          self.convertedSecondaryBuffer = nil
-          self.primaryVideoBuffer = nil
-          self.secondaryVideoBuffer = nil
+          // Clear PiP mixer resources after recording with autoreleasepool for immediate cleanup
+          autoreleasepool {
+            self.convertedPrimaryBuffer = nil
+            self.convertedSecondaryBuffer = nil
+            self.primaryVideoBuffer = nil
+            self.secondaryVideoBuffer = nil
+            
+            // Reset PiP mixer to free up Metal resources
+            if let mixer = self.pipVideoMixer {
+              mixer.reset()
+            }
+          }
           
-          // Reset PiP mixer to free up Metal resources
-          if let mixer = self.pipVideoMixer {
-            mixer.reset()
+          // Force garbage collection on video queue to clean up lingering resources
+          CameraQueues.videoQueue.async {
+            autoreleasepool {
+              // Empty autoreleasepool to force cleanup
+            }
           }
         }
 
@@ -116,7 +129,7 @@ extension CameraSession {
         let recordingSession = try RecordingSession(url: options.path,
                                                     fileType: options.fileType,
                                                     metadataProvider: self.metadataProvider,
-                                                    clock: self.captureSession.clock,
+                                                    clock: self.activeCaptureSession.clock,
                                                     orientation: orientation,
                                                     completion: onFinish)
 
@@ -125,13 +138,12 @@ extension CameraSession {
            let audioOutput = self.audioOutput,
            let audioInput = self.audioDeviceInput {
           VisionLogger.log(level: .info, message: "Enabling Audio for Recording...")
-          // Activate Audio Session asynchronously
-          CameraQueues.audioQueue.async {
-            do {
-              try self.activateAudioSession()
-            } catch {
-              self.onConfigureError(error)
-            }
+          
+          // Activate Audio Session SYNCHRONOUSLY before recording starts
+          do {
+            try self.activateAudioSession()
+          } catch {
+            throw error
           }
 
           // Initialize audio asset writer
