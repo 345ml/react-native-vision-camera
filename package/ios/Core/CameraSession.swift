@@ -325,9 +325,22 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 
     // Start/Stop session
     if configuration.isActive {
+      // Protect against calling startRunning during configuration
+      if session.isInterrupted {
+        VisionLogger.log(level: .warning, message: "Session is interrupted, cannot start")
+        return
+      }
+      
       VisionLogger.log(level: .info, message: "Starting capture session...")
-      session.startRunning()
-      delegate?.onCameraStarted()
+      // Use dispatch to ensure we're not in a configuration block
+      DispatchQueue.main.async { [weak self] in
+        guard let self = self else { return }
+        let currentSession = self.activeCaptureSession
+        if !currentSession.isRunning && configuration.isActive {
+          currentSession.startRunning()
+          self.delegate?.onCameraStarted()
+        }
+      }
     } else {
       VisionLogger.log(level: .info, message: "Stopping capture session...")
       session.stopRunning()
