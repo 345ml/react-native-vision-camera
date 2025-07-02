@@ -70,15 +70,15 @@ extension CameraSession {
     codeScannerOutput = nil
     
     multiCamSession.beginConfiguration()
-    defer {
-      multiCamSession.commitConfiguration()
-    }
     
     // Configure primary camera
     try configurePrimaryCamera(session: multiCamSession, configuration: configuration)
     
     // Configure secondary camera
     try configureSecondaryCamera(session: multiCamSession, configuration: configuration)
+    
+    // Commit configuration synchronously to prevent startRunning before commit
+    multiCamSession.commitConfiguration()
     
     VisionLogger.log(level: .info, message: "Successfully configured Multi-Camera!")
     

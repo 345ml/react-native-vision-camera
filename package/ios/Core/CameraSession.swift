@@ -608,13 +608,22 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     if shouldRestart {
       // restart capture session after an error occured, but only if not recording
       CameraQueues.cameraQueue.async {
-        // Restart the appropriate session (multi-cam or regular)
-        if let multiCamSession = self.multiCamSession {
-          VisionLogger.log(level: .info, message: "Restarting multi-camera session after error")
-          multiCamSession.startRunning()
-        } else {
-          VisionLogger.log(level: .info, message: "Restarting regular camera session after error")
-          self.captureSession.startRunning()
+        // Add delay to ensure any ongoing configuration is completed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+          // Restart the appropriate session (multi-cam or regular)
+          if let multiCamSession = self.multiCamSession {
+            // Only restart if session is not already running
+            if !multiCamSession.isRunning {
+              VisionLogger.log(level: .info, message: "Restarting multi-camera session after error")
+              multiCamSession.startRunning()
+            }
+          } else {
+            // Only restart if session is not already running
+            if !self.captureSession.isRunning {
+              VisionLogger.log(level: .info, message: "Restarting regular camera session after error")
+              self.captureSession.startRunning()
+            }
+          }
         }
       }
     }
