@@ -318,8 +318,12 @@ class PiPVideoMixer {
     
     let pipPosition = SIMD2(Float(pipFrame.origin.x) * Float(fullScreenTexture.width), 
                            Float(pipFrame.origin.y) * Float(fullScreenTexture.height))
-    let pipSize = SIMD2(Float(pipFrame.size.width) * Float(fullScreenTexture.width), 
-                       Float(pipFrame.size.height) * Float(fullScreenTexture.height))
+    
+    // Calculate PiP size with fixed aspect ratio (height = width * 1.25)
+    let pipWidthPixels = Float(pipFrame.size.width) * Float(fullScreenTexture.width)
+    let pipHeightPixels = pipWidthPixels * 1.25  // Fixed aspect ratio
+    
+    let pipSize = SIMD2(pipWidthPixels, pipHeightPixels)
     var parameters = MixerParameters(pipPosition: pipPosition, pipSize: pipSize)
     
     // Set up command queue, buffer, and encoder with GPU error protection

@@ -135,7 +135,7 @@ class MultiCamPreviewView: UIView {
     guard let container = pipContainer, let secondaryLayer = secondaryPreviewLayer else { return }
     
     let pipWidth = bounds.width * pipSize.width
-    let pipHeight = bounds.height * pipSize.height
+    let pipHeight = pipWidth * 1.25  // Fixed aspect ratio: height = width * 1.25
     
     let pipX = bounds.width * pipPosition.x - pipWidth / 2
     let pipY = bounds.height * pipPosition.y - pipHeight / 2
