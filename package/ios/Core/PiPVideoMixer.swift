@@ -318,8 +318,8 @@ class PiPVideoMixer {
     
     let pipPosition = SIMD2(Float(pipFrame.origin.x) * Float(fullScreenTexture.width), 
                            Float(pipFrame.origin.y) * Float(fullScreenTexture.height))
-    let pipSize = SIMD2(Float(pipFrame.size.width) * Float(pipTexture.width), 
-                       Float(pipFrame.size.height) * Float(pipTexture.height))
+    let pipSize = SIMD2(Float(pipFrame.size.width) * Float(fullScreenTexture.width), 
+                       Float(pipFrame.size.height) * Float(fullScreenTexture.height))
     var parameters = MixerParameters(pipPosition: pipPosition, pipSize: pipSize)
     
     // Set up command queue, buffer, and encoder with GPU error protection
