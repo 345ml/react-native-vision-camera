@@ -165,7 +165,7 @@ extension CameraSession {
     
     // Set a multi-camera compatible format before adding the input
     if #available(iOS 13.0, *) {
-      try configureMultiCamFormat(device: videoDevice)
+      try configureMultiCamFormat(device: videoDevice, configuration: configuration)
     }
     
     let input = try AVCaptureDeviceInput(device: videoDevice)
@@ -195,7 +195,7 @@ extension CameraSession {
     
     // Set a multi-camera compatible format before adding the input
     if #available(iOS 13.0, *) {
-      try configureMultiCamFormat(device: secondaryVideoDevice)
+      try configureMultiCamFormat(device: secondaryVideoDevice, configuration: configuration)
     }
     
     let secondaryInput = try AVCaptureDeviceInput(device: secondaryVideoDevice)
@@ -379,7 +379,7 @@ extension CameraSession {
    Configure a format that's compatible with AVCaptureMultiCamSession
    */
   @available(iOS 13.0, *)
-  private func configureMultiCamFormat(device: AVCaptureDevice) throws {
+  private func configureMultiCamFormat(device: AVCaptureDevice, configuration: CameraConfiguration) throws {
     VisionLogger.log(level: .info, message: "Configuring multi-camera compatible format for \(device.localizedName)...")
     
     // Find a format that supports multi-camera
@@ -391,9 +391,18 @@ extension CameraSession {
       throw CameraError.device(.invalid)
     }
     
-    // Try to find a reasonable resolution (e.g., 1920x1080 or lower)
-    let targetWidth: Int32 = 1920
-    let targetHeight: Int32 = 1080
+    // Try to use the format from configuration if available, otherwise use a reasonable default
+    var targetWidth: Int32 = 1280  // Default fallback
+    var targetHeight: Int32 = 720   // Default fallback
+    
+    // Check if there's a configured format to use as target
+    if let configuredFormat = configuration.format {
+      targetWidth = Int32(configuredFormat.videoWidth)
+      targetHeight = Int32(configuredFormat.videoHeight)
+      VisionLogger.log(level: .info, message: "Using configured resolution target: \(targetWidth)x\(targetHeight)")
+    } else {
+      VisionLogger.log(level: .info, message: "No configured format found, using default: \(targetWidth)x\(targetHeight)")
+    }
     
     // Sort formats by resolution (prefer smaller resolutions for multi-cam)
     let sortedFormats = formats.sorted { format1, format2 in
