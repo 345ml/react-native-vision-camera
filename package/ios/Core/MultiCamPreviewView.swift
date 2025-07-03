@@ -25,6 +25,15 @@ class MultiCamPreviewView: UIView {
   private var pipSize: CGSize = CGSize(width: 0.25, height: 0.15) // Width: 25%, Height: 15% of parent size
   
   /**
+   Gets or sets the resize mode of the MultiCamPreviewView.
+   */
+  var resizeMode: ResizeMode = .cover {
+    didSet {
+      updateVideoGravity()
+    }
+  }
+  
+  /**
    Initialize with a multi-camera session
    */
   init(frame: CGRect, session: AVCaptureMultiCamSession, primaryPosition: AVCaptureDevice.Position, secondaryPosition: AVCaptureDevice.Position) {
@@ -40,7 +49,6 @@ class MultiCamPreviewView: UIView {
     // Primary preview layer (full screen)
     primaryPreviewLayer = AVCaptureVideoPreviewLayer()
     primaryPreviewLayer?.setSessionWithNoConnection(session)
-    primaryPreviewLayer?.videoGravity = .resizeAspectFill
     
     if let primaryLayer = primaryPreviewLayer {
       layer.addSublayer(primaryLayer)
@@ -49,7 +57,9 @@ class MultiCamPreviewView: UIView {
     // Secondary preview layer (PiP)
     secondaryPreviewLayer = AVCaptureVideoPreviewLayer()
     secondaryPreviewLayer?.setSessionWithNoConnection(session)
-    secondaryPreviewLayer?.videoGravity = .resizeAspectFill
+    
+    // Set initial video gravity based on resizeMode
+    updateVideoGravity()
     
     // Create PiP container
     pipContainer = UIView()
@@ -184,5 +194,22 @@ class MultiCamPreviewView: UIView {
     pipSize = CGSize(width: max(0.1, min(0.5, size.width)),
                      height: max(0.1, min(0.5, size.height)))
     layoutPiP()
+  }
+  
+  /**
+   Updates the video gravity for both preview layers based on the current resize mode
+   */
+  private func updateVideoGravity() {
+    let primaryVideoGravity: AVLayerVideoGravity
+    switch resizeMode {
+    case .cover:
+      primaryVideoGravity = .resizeAspectFill
+    case .contain:
+      primaryVideoGravity = .resizeAspect
+    }
+    
+    primaryPreviewLayer?.videoGravity = primaryVideoGravity
+    // PiP is always cover (resizeAspectFill) for better visual consistency
+    secondaryPreviewLayer?.videoGravity = .resizeAspectFill
   }
 }

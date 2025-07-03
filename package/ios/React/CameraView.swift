@@ -316,10 +316,14 @@ public final class CameraView: UIView, CameraSessionDelegate, PreviewViewDelegat
       previewView = nil
     }
 
+    // Update resizeMode from React
+    let parsed = try? ResizeMode(jsValue: resizeMode as String)
+    let currentResizeMode = parsed ?? .cover
+    
     if let singlePreview = previewView as? PreviewView {
-      // Update resizeMode from React (only for single camera preview)
-      let parsed = try? ResizeMode(jsValue: resizeMode as String)
-      singlePreview.resizeMode = parsed ?? .cover
+      singlePreview.resizeMode = currentResizeMode
+    } else if let multiPreview = previewView as? MultiCamPreviewView {
+      multiPreview.resizeMode = currentResizeMode
     }
   }
 
