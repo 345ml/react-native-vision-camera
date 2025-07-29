@@ -66,6 +66,28 @@ extension AVCaptureVideoDataOutput {
         settings[AVVideoCompressionPropertiesKey] = compressionSettings
       }
     }
+    
+    // Ensure proper key frame interval for better encoding and streaming
+    // This helps prevent green noise artifacts in the initial frames
+    if settings[AVVideoCompressionPropertiesKey] == nil {
+      settings[AVVideoCompressionPropertiesKey] = [:]
+    }
+    if var compressionSettings = settings[AVVideoCompressionPropertiesKey] as? [String: Any] {
+      // Set key frame interval to 1 second (30 frames at 30fps)
+      // This ensures frequent I-frames for better seeking and initial playback
+      if compressionSettings[AVVideoMaxKeyFrameIntervalKey] == nil {
+        compressionSettings[AVVideoMaxKeyFrameIntervalKey] = NSNumber(value: 30)
+        VisionLogger.log(level: .info, message: "Setting key frame interval to 30 frames")
+      }
+      
+      // Also set key frame interval duration for time-based control
+      if compressionSettings[AVVideoMaxKeyFrameIntervalDurationKey] == nil {
+        compressionSettings[AVVideoMaxKeyFrameIntervalDurationKey] = NSNumber(value: 1.0)
+        VisionLogger.log(level: .info, message: "Setting key frame interval duration to 1.0 seconds")
+      }
+      
+      settings[AVVideoCompressionPropertiesKey] = compressionSettings
+    }
 
     return settings
   }

@@ -77,7 +77,9 @@ final class RecordingSession {
 
     do {
       assetWriter = try AVAssetWriter(outputURL: url, fileType: fileType)
-      assetWriter.shouldOptimizeForNetworkUse = false
+      // Enable optimization for network use to ensure proper moov atom placement
+      // This is crucial for streaming playback and prevents green noise artifacts
+      assetWriter.shouldOptimizeForNetworkUse = true
     } catch let error as NSError {
       throw CameraError.capture(.createRecorderError(message: error.description))
     }

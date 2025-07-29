@@ -253,6 +253,9 @@ class PiPVideoMixer {
     // Mark as not prepared first to prevent new operations
     isPrepared = false
     
+    // Reset frame counter
+    frameCount = 0
+    
     // Flush and clear texture cache before releasing
     if let textureCache = textureCache {
       CVMetalTextureCacheFlush(textureCache, 0)
@@ -282,6 +285,9 @@ class PiPVideoMixer {
     var pipSize: SIMD2<Float>
   }
   
+  // Track frame count to handle initial frames specially
+  private var frameCount: Int = 0
+  
   func mix(fullScreenPixelBuffer: CVPixelBuffer, pipPixelBuffer: CVPixelBuffer, fullScreenPixelBufferIsFrontCamera: Bool = false) -> CVPixelBuffer? {
     guard isPrepared else {
       print("PiP Mixer: Not prepared")
@@ -305,6 +311,20 @@ class PiPVideoMixer {
       print("PiP Mixer: Failed to get pixel buffer from pool")
       return nil
     }
+    
+    // Clear the pixel buffer for the first few frames to prevent green noise
+    // This is especially important for the initial frames of the recording
+    if frameCount < 3 {
+      CVPixelBufferLockBaseAddress(outputPixelBuffer, [])
+      let baseAddress = CVPixelBufferGetBaseAddress(outputPixelBuffer)
+      let bytesPerRow = CVPixelBufferGetBytesPerRow(outputPixelBuffer)
+      let height = CVPixelBufferGetHeight(outputPixelBuffer)
+      if let baseAddress = baseAddress {
+        memset(baseAddress, 0, bytesPerRow * height)
+      }
+      CVPixelBufferUnlockBaseAddress(outputPixelBuffer, [])
+    }
+    frameCount += 1
     
     // Convert input buffers to BGRA if needed
     let convertedFullScreen = convertToBGRAIfNeeded(pixelBuffer: fullScreenPixelBuffer) ?? fullScreenPixelBuffer
@@ -381,7 +401,8 @@ class PiPVideoMixer {
     commandEncoder.endEncoding()
     commandBuffer.commit()
     
-    // Don't wait for completion to avoid blocking, but check status
+    // Wait for completion synchronously to ensure proper frame ordering
+    // This matches Apple's sample implementation pattern
     commandBuffer.waitUntilCompleted()
     
     // Check command buffer status after completion

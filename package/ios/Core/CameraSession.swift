@@ -417,16 +417,9 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
   private final func processPiPFrame(primaryBuffer: CMSampleBuffer, orientation: Orientation, isMirrored: Bool) {
     guard let primaryPixelBuffer = primaryVideoBuffer,
           let secondaryPixelBuffer = secondaryVideoBuffer else {
-      // If we don't have both buffers, record the primary buffer as-is
-      if let recordingSession {
-        do {
-          try recordingSession.append(buffer: primaryBuffer, ofType: .video)
-        } catch let error as CameraError {
-          delegate?.onError(error)
-        } catch {
-          delegate?.onError(.capture(.unknown(message: error.localizedDescription)))
-        }
-      }
+      // Don't record anything until both buffers are available
+      // This prevents format inconsistency in the initial frames
+      VisionLogger.log(level: .info, message: "Waiting for both camera buffers before starting recording")
       return
     }
     
@@ -449,16 +442,7 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     
     guard mixer.isPrepared else {
       print("PiP mixer not prepared")
-      // Fallback to primary buffer recording
-      if let recordingSession {
-        do {
-          try recordingSession.append(buffer: primaryBuffer, ofType: .video)
-        } catch let error as CameraError {
-          delegate?.onError(error)
-        } catch {
-          delegate?.onError(.capture(.unknown(message: error.localizedDescription)))
-        }
-      }
+      // Don't record until mixer is ready to ensure consistent format
       return
     }
     
